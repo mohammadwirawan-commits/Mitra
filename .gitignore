@@ -1,0 +1,47 @@
+# ─────────────────────────────────────────────────────────────
+#  Mitra "Pivot All Region" automation — .gitignore
+#
+#  This project handles REAL commission & penalty data (mitra names,
+#  financial figures, tracking IDs, PII). By default we block ALL
+#  spreadsheets and data files from being committed, and only allow
+#  the blank deliverable templates in TEMPLATES/.
+# ─────────────────────────────────────────────────────────────
+
+# --- Default-deny all data/spreadsheet files (may contain real data) ---
+*.xlsx
+*.xlsm
+*.xls
+*.csv
+*.tsv
+*.pdf
+
+# --- ...except the blank, shareable deliverable templates ---
+!TEMPLATES/
+!TEMPLATES/*.xlsx
+
+# --- Sensitive data directories (real June/July inputs & outputs) ---
+/Results/
+/sample-data-june-2026/
+/_ready-to-run-Jun-2026/
+/reference/
+/July Actual/
+/_generated/
+/_archive/
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+*.egg-info/
+.ipynb_checkpoints/
+.venv/
+venv/
+
+# --- OS / editor cruft ---
+.DS_Store
+Thumbs.db
+desktop.ini
+.vscode/
+.idea/
+
+# --- Local tooling / Claude Code settings ---
+.claude/
