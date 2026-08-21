@@ -159,6 +159,17 @@ def _norm_id(s: pd.Series) -> pd.Series:
     return s.map(_norm_one)
 
 
+BY_OWNER_REGION = "By Owner"
+
+
+def _is_by_owner(region) -> "pd.Series | bool":
+    """True where the Region marks a multi-mitra 'By Owner' mitra (case-insensitive).
+    Accepts a Series (vectorised) or a scalar."""
+    if isinstance(region, pd.Series):
+        return region.astype(str).str.strip().str.casefold() == BY_OWNER_REGION.casefold()
+    return str(region).strip().casefold() == BY_OWNER_REGION.casefold()
+
+
 # --------------------------------------------------------------------------
 # Commission — derived-column engine
 #
@@ -263,14 +274,18 @@ def assemble_commission(data: pd.DataFrame, kpi_row_fn) -> pd.DataFrame:
     """
     pivot = build_pivot(data)
 
-    # DPID -> (DPMS, Region, Mitra Name), first occurrence; sorted by DPID like the sheet.
+    # DPID -> (DPMS, Region, Mitra Name), first occurrence.
     keyinfo = (data.assign(_k=_norm_id(data["DPID"]))
                    .groupby("_k", sort=False)
                    .agg(DPMS=("DPMS", "first"), Region=("Region", "first"),
                         Mitra=("Mitra Name", "first"), DPID=("DPID", "first")))
     keyinfo = keyinfo.reset_index()
+    # Sort: ascending DPID for normal mitras, with the "By Owner" mitras (owners
+    # who own several mitras — flagged Region == "By Owner" in the Region Split)
+    # appended at the very bottom, per the golden sheet layout.
+    keyinfo["_byowner"] = _is_by_owner(keyinfo["Region"])
     keyinfo["_sort"] = pd.to_numeric(keyinfo["DPID"], errors="coerce")
-    keyinfo = keyinfo.sort_values(["_sort", "_k"]).reset_index(drop=True)
+    keyinfo = keyinfo.sort_values(["_byowner", "_sort", "_k"]).reset_index(drop=True)
 
     rows = []
     for _, ki in keyinfo.iterrows():
@@ -522,3 +537,106 @@ def build_kpi_row_fn(df_acq=None, df_allo=None, df_unreg=None,
         return out
 
     return kpi_row_fn
+
+
+# --------------------------------------------------------------------------
+# Phase 2b — Rekap Commission / By Owner per Mitra key lists + Data Sources feed
+#
+# The downstream summary sheets are ENTIRELY formula-driven in the workbook
+# (VLOOKUP into 'Data Sources' + GETPIVOTDATA into the Commission!CX rollup pivot).
+# The automation therefore only supplies each sheet's KEY column; Excel recomputes
+# the rest on open. See PROJECT_CONTEXT §10 (Phase 2b).
+# --------------------------------------------------------------------------
+
+def build_rekap_keys(commission: pd.DataFrame) -> list:
+    """Rekap Commission col-A keys = one row per unique mitra.
+
+    Normal mitras key by DPMS ID (col B), ascending; the 'By Owner' owners collapse
+    to ONE row each, keyed by their shared DPMS code (e.g. GRSI / TMBA), appended at
+    the bottom. Matches the golden Rekap layout (ascending DPMS, then owner codes).
+    """
+    df = commission[["B", "D"]].rename(columns={"B": "DPMS", "D": "Region"})
+    byo = _is_by_owner(df["Region"])
+
+    def _uniq(seq):
+        seen, out = set(), []
+        for v in seq:
+            k = _norm_one(v)
+            if k and k not in seen:
+                seen.add(k)
+                out.append(v)
+        return out
+
+    normal = _uniq(df.loc[~byo, "DPMS"])
+    normal.sort(key=lambda v: (pd.to_numeric(pd.Series([v]), errors="coerce").iloc[0]
+                               if pd.notna(pd.to_numeric(pd.Series([v]), errors="coerce").iloc[0])
+                               else float("inf"), _norm_one(v)))
+    owners = _uniq(df.loc[byo, "DPMS"])
+    return normal + owners
+
+
+def build_byowner_keys(commission: pd.DataFrame) -> list:
+    """By Owner per Mitra col-A keys = the DPIDs (col A) of the 'By Owner' mitras,
+    in Commission order (already appended ascending at the bottom)."""
+    byo = _is_by_owner(commission["D"])
+    return commission.loc[byo, "A"].tolist()
+
+
+# Intake 'Data Mitra Changes' -> Data Sources master. The intake tab headers match
+# the Data Sources sheet headers verbatim so the upsert is a direct column-name map.
+# 'DPID' is the upsert key; a change row with a new DPID is appended.
+DATA_SOURCES_KEY = "DPID"
+# Columns the pipeline derives rather than expecting the team to fill.
+DATA_SOURCES_DERIVED = {"Nomor Rekening tanpa (-)": "Nomor Rekening"}
+
+
+def upsert_data_sources(master: pd.DataFrame, changes: pd.DataFrame | None) -> pd.DataFrame:
+    """Upsert the monthly 'Data Mitra Changes' rows into the carried-forward Data
+    Sources master, keyed by DPID.
+
+    `master`  the carried-forward Data Sources sheet (its header columns).
+    `changes` the intake tab (a subset of the same columns + DPID key). Only the
+              columns present in `changes` are updated; unknown/new DPIDs are appended.
+    Returns a new master frame (same column order as `master`).
+    """
+    out = master.copy()
+    if changes is None or not len(changes):
+        return _derive_data_sources(out)
+
+    out["_k"] = _norm_id(out[DATA_SOURCES_KEY])
+    ch = changes.copy()
+    ch["_k"] = _norm_id(ch[DATA_SOURCES_KEY])
+    # only the change columns that actually exist in the master (by exact header)
+    upd_cols = [c for c in ch.columns
+                if c in out.columns and c not in ("_k", DATA_SOURCES_KEY)]
+    master_by_k = {k: i for i, k in enumerate(out["_k"])}
+
+    appended = []
+    for _, r in ch.iterrows():
+        k = r["_k"]
+        if not k:
+            continue
+        if k in master_by_k:                     # update in place
+            i = master_by_k[k]
+            for c in upd_cols:
+                v = r[c]
+                if pd.notna(v) and str(v).strip() != "":
+                    out.iat[i, out.columns.get_loc(c)] = v
+        else:                                    # brand-new mitra -> append
+            newrow = {c: r[c] for c in ch.columns if c in out.columns}
+            appended.append(newrow)
+
+    if appended:
+        out = pd.concat([out, pd.DataFrame(appended).reindex(columns=out.columns)],
+                        ignore_index=True)
+    out = out.drop(columns=["_k"], errors="ignore")
+    return _derive_data_sources(out)
+
+
+def _derive_data_sources(df: pd.DataFrame) -> pd.DataFrame:
+    """Fill the derived Data Sources columns (e.g. account number without dashes)."""
+    for dst, src in DATA_SOURCES_DERIVED.items():
+        if dst in df.columns and src in df.columns:
+            df[dst] = df[src].map(
+                lambda v: "" if pd.isna(v) else str(v).replace("-", "").replace(" ", ""))
+    return df

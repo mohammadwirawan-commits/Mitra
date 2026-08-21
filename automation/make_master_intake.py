@@ -30,6 +30,28 @@ INLINE_TABS = {
         ["Acquisition Claim", 11327547, "Lazada (TulOjeTy)", 3165, 3165,
          "Mitra JKT @ Pademangan Barat", "All Region - Non POH", 2, 2.0, 1700],
     ),
+    # Data Mitra Changes: the single mitra-master feed for the Data Sources sheet.
+    # Headers match the 'Data Sources' sheet headers VERBATIM so par_pipeline.upsert_data_sources
+    # maps them by name (keyed on DPID). New DPID -> appended; existing -> fields updated.
+    # SKB Number / SKB Valid Until are for the PPh sheet (Phase 3), not Data Sources.
+    "Data Mitra Changes": (
+        ["DPID", "DPMS ID", "Mitra Name", "Per Mitra Name", "Owner Name",
+         "Nama Owner di NS (Data DJP)", "Region", "Status", "Email",
+         "NIK", "Tax ID", "Tax ID (16 digit)", "Jenis Usaha",
+         "Alamat NIK", "Alamat NPWP", "Address 1", "Address 2",
+         "Bank", "Nama Pemilik", "Nomor Rekening", "CUSID netsuite",
+         "Hold Commission", "Note Perubahan",
+         "Drop Off to SH Remarks", "MPM/Last Mile Remarks", "PKP Remarks",
+         "SKB Number", "SKB Valid Until"],
+        [2265, 2265, "Mitra JKT @ Pejuang", "Mitra JKT @ Pejuang", "Andi",
+         "ANDI", "All Region - Non POH", "OPEN", "mitra@example.com",
+         "3201234506850001", "01.234.567.8-901.000", "0123456789012345", "Pribadi",
+         "Jl. Contoh No.1, Bekasi", "Jl. Contoh No.1, Bekasi", "Jl. Contoh No.1", "Bekasi",
+         "BCA", "Andi", "1234567890", "CUS012345 ANDI",
+         "No", "New mitra onboarded Jul-2026",
+         "No", "No", "No",
+         "", ""],
+    ),
 }
 
 HDR_FILL = PatternFill("solid", fgColor="305496")
@@ -69,8 +91,10 @@ GROUPS = [
          "Basis for LEX Hub Pickup commission (Rp 500 per pickup parcel)."),
         ("Cross Border", ALLR, "XB parcels: tracking_id, DPID, delivery_fee (comm = 30%).",
          "Cross-Border commission = 30% x delivery fee for each XB parcel."),
-        ("Data Mitra Changes", ALLR, "New/changed Mitra master data + ownership / SKB.",
-         "Feeds Data Sources + PPh: sets entity type (tax rate), SKB, bank details, hold-commission flag."),
+        ("Data Mitra Changes", INLINE, "One row per NEW or CHANGED Mitra — full master "
+         "(DPID, DPMS, owner, region, tax/NIK/NPWP, addresses, bank, Netsuite ID, SKB, hold-comm).",
+         "The single Data Sources feed: upserted into the mitra master by DPID (new DPID appended). "
+         "Also feeds PPh: entity type (tax rate), SKB, bank details, hold-commission flag."),
     ]),
     ("Fanny", "158A8A", [
         ("7. List Drop SH", FIRST, "Mitra Drop-off-to-SH participation list + join/withdraw dates.",
