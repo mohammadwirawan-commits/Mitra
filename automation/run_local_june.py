@@ -195,7 +195,8 @@ def main():
     if do_write:
         print("\n===== Writing workbook (LIVE template round-trip; ~3 min) =====")
         par_writer.write_pivot_all_region(GOLDEN, OUT_FILE, data, commission,
-                                          rekap_keys=rekap_keys, byowner_keys=byowner_keys)
+                                          rekap_keys=rekap_keys, byowner_keys=byowner_keys,
+                                          month="2026-06")
         print(f"[done] wrote {OUT_FILE}")
     else:
         print("\n(skipped workbook write: --no-write)")

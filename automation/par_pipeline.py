@@ -640,3 +640,30 @@ def _derive_data_sources(df: pd.DataFrame) -> pd.DataFrame:
             df[dst] = df[src].map(
                 lambda v: "" if pd.isna(v) else str(v).replace("-", "").replace(" ", ""))
     return df
+
+
+# --------------------------------------------------------------------------
+# Phase 3a — PPh Mitra Ninja 2026 (income-tax sheet)
+#
+# The sheet is a 12-month rolling ledger keyed by DP ID. Only the current month's
+# bruto (gross) column carries a live VLOOKUP into Rekap; the PPh calc block (AR..AZ)
+# is live and computes on open. See PROJECT_CONTEXT §10 / plan Phase 3a.
+# --------------------------------------------------------------------------
+
+def pph_bruto_label(month: str) -> str:
+    """'YYYY-MM' (or 'YYYY-MM-DD') -> the PPh bruto header label for that month,
+    e.g. '2026-06' -> 'PENGHASILAN BRUTO M06Y2026'."""
+    y, m = str(month).split("-")[:2]
+    return f"PENGHASILAN BRUTO M{int(m):02d}Y{int(y)}"
+
+
+def active_dpid_set(commission: pd.DataFrame) -> set:
+    """Normalised DP IDs that had commission this month (Commission col A) — the
+    rows that get the live bruto formula in the PPh sheet."""
+    return set(_norm_id(commission["A"]))
+
+
+def byowner_dpid_set(commission: pd.DataFrame) -> set:
+    """Normalised DP IDs of the 'By Owner' mitras (Commission Region col D). These are
+    invoiced at owner level and are deliberately excluded from the per-DP PPh sheet."""
+    return set(_norm_id(commission.loc[_is_by_owner(commission["D"]), "A"]))

@@ -52,6 +52,29 @@ BYOWNER_SHEET = "By Owner per Mitra"
 BYOWNER_DATA_START = 8           # header row 5, numbered row 7, data row 8
 BYOWNER_PROBE_COL = 2
 
+# --- PPh Mitra Ninja 2026 (income-tax ledger; keyed by DP ID) -------------------
+PPH_SHEET = "PPh Mitra Ninja 2026"
+PPH_HEADER_ROW = 4               # labels row 4, sub-labels row 5, numbered row 6, data row 7
+PPH_DATA_START = 7
+PPH_KEY_COL = 2                  # col B = DP ID
+PPH_BRUTO_FIRST = ci("R")        # first monthly-bruto column (M12Y2025)
+PPH_BRUTO_LAST = ci("AC")        # last monthly-bruto column (M11Y2026)
+PPH_PPH_FIRST = ci("AE")         # first monthly-PPh column
+PPH_PPH_LAST = ci("AP")          # last monthly-PPh column
+PPH_AR = ci("AR")                # "Penghasilan Bruto Bulan Ke-n" = live pointer to current bruto col
+# The current-month bruto formula (column-agnostic; $B{r} = DP ID). Verified vs golden.
+PPH_BRUTO_FORMULA = (
+    "=VLOOKUP($B{r},'Rekap Commission'!$A:$BO,48,FALSE)"
+    "+VLOOKUP($B{r},'Rekap Commission'!$A:$BO,49,FALSE)"
+    "-IFERROR(GETPIVOTDATA(\"Sum of Adjustment Bruto\",'Adjustment&Penalty'!$AA$3,\"DPMS ID\",$B{r}),0)"
+)
+# Data Sources header -> PPh column index, for seeding brand-new mitra rows.
+PPH_NEW_ROW_MAP = {
+    1: "DPID", 2: "DPID", 3: "Mitra Name", 4: "Owner Name",
+    5: "Nama Owner di NS (Data DJP)", 8: "Email", 9: "Jenis Usaha",
+    13: "NIK", 14: "Tax ID", 15: "Tax ID (16 digit)", 16: "Alamat NPWP",
+}
+
 
 # --------------------------------------------------------------------------
 # small helpers
@@ -123,7 +146,7 @@ def _filldown_formulas(ws, src_row, dst_row, formula_cols):
 # --------------------------------------------------------------------------
 def write_pivot_all_region(template_path, out_path, data_df, commission_df,
                            adj_result=None, data_sources_changes=None,
-                           rekap_keys=None, byowner_keys=None, verbose=True) -> str:
+                           rekap_keys=None, byowner_keys=None, month=None, verbose=True) -> str:
     """Write the monthly workbook as a LIVE template round-trip (values + preserved
     pivots/formulas). See module docstring.
 
@@ -133,10 +156,14 @@ def write_pivot_all_region(template_path, out_path, data_df, commission_df,
     `data_sources_changes`  optional 'Data Mitra Changes' intake frame (upserted).
     `rekap_keys`            optional list of Rekap Commission col-A keys.
     `byowner_keys`          optional list of By Owner per Mitra col-A keys.
+    `month`                 optional 'YYYY-MM'; when given, populates the PPh sheet
+                            (installs the current-month bruto formula, freezes the prior
+                            month, repoints the calc pointer, appends new mitras).
     """
     if verbose:
         print(f"[writer] loading template: {template_path}")
     wb = openpyxl.load_workbook(template_path)
+    wb.__dict__["_par_template_path"] = template_path   # for PPh prior-month freeze (cached read)
 
     counts = {}
     counts["data"] = _write_data(wb, data_df, verbose)
@@ -151,6 +178,9 @@ def write_pivot_all_region(template_path, out_path, data_df, commission_df,
     if byowner_keys is not None:
         _write_keyed_sheet(wb, BYOWNER_SHEET, BYOWNER_DATA_START, BYOWNER_PROBE_COL,
                            byowner_keys, verbose)
+    if month is not None:
+        _write_pph(wb, month, par.active_dpid_set(commission_df),
+                   par.byowner_dpid_set(commission_df), verbose)
 
     _refresh_pivots(wb, counts, verbose)
 
@@ -359,6 +389,129 @@ def _write_keyed_sheet(wb, sheet, data_start, probe_col, keys, verbose):
         print(f"[writer] {sheet}: {n} keys (rows {r0}..{last_written}); "
               f"{len(formula_cols)} formula cols kept; template extent row {tmpl_last}")
     return n
+
+
+# --------------------------------------------------------------------------
+# PPh Mitra Ninja 2026 — install current-month bruto formula + freeze prior + append new mitras
+# --------------------------------------------------------------------------
+def _pph_bruto_col(ws, month):
+    """Resolve the 1-based column of the current-month bruto in the PPh header."""
+    label = par.pph_bruto_label(month)
+    for c in range(PPH_BRUTO_FIRST, PPH_BRUTO_LAST + 1):
+        if str(ws.cell(row=PPH_HEADER_ROW, column=c).value).strip() == label:
+            return c
+    raise ValueError(f"PPh: month {month} ({label!r}) not in this sheet's bruto window "
+                     f"(cols {get_column_letter(PPH_BRUTO_FIRST)}:{get_column_letter(PPH_BRUTO_LAST)})")
+
+
+def _freeze_prior_bruto(wb, ws, prior_col, last_row, template_path, verbose):
+    """Overwrite any formula in the prior month's bruto column with its cached value,
+    so it can't recompute against the new month's Rekap. Only pays the extra data_only
+    load when the column actually still holds formulas (a real month-over-month run)."""
+    if prior_col < PPH_BRUTO_FIRST:
+        return 0
+    formula_rows = set(r for r in range(PPH_DATA_START, last_row + 1)
+                       if _is_formula(ws.cell(row=r, column=prior_col).value))
+    if not formula_rows:
+        return 0
+    # read the cached values once via a streaming (read_only) pass — random .cell()
+    # access on a read_only worksheet is slow/unreliable, so iterate the column.
+    src_wb = openpyxl.load_workbook(template_path, read_only=True, data_only=True)
+    src = src_wb[PPH_SHEET]
+    cached = {}
+    for row in src.iter_rows(min_row=PPH_DATA_START, max_row=last_row,
+                             min_col=prior_col, max_col=prior_col):
+        cell = row[0]
+        if cell.row in formula_rows:
+            cached[cell.row] = cell.value
+    src_wb.close()
+    for r, v in cached.items():
+        _set(ws, r, prior_col, _cell_val(v))
+    if verbose:
+        print(f"[writer] PPh: froze prior bruto col {get_column_letter(prior_col)} "
+              f"({len(formula_rows)} formula rows -> values)")
+    return len(formula_rows)
+
+
+def _write_pph(wb, month, active_dpids, byowner_dpids, verbose):
+    if PPH_SHEET not in wb.sheetnames:
+        raise KeyError(f"sheet '{PPH_SHEET}' not in template")
+    ws = wb[PPH_SHEET]
+    cur = _pph_bruto_col(ws, month)
+    cur_L = get_column_letter(cur)
+    last_row = _find_last_row(ws, PPH_DATA_START, key_col=PPH_KEY_COL)
+
+    # 1. freeze the previous month's bruto column (if it still holds live formulas)
+    _freeze_prior_bruto(wb, ws, cur - 1, last_row,
+                        wb.__dict__.get("_par_template_path"), verbose)
+
+    # 2. index existing PPh rows by DP ID; install the live bruto formula for active rows
+    row_by_dp = {}
+    installed = 0
+    for r in range(PPH_DATA_START, last_row + 1):
+        dp = par._norm_one(ws.cell(row=r, column=PPH_KEY_COL).value)
+        if dp:
+            row_by_dp[dp] = r
+        if dp in active_dpids:
+            _set(ws, r, cur, PPH_BRUTO_FORMULA.format(r=r))
+            installed += 1
+        else:
+            _set(ws, r, cur, 0)          # inactive this month -> clean 0 in the current column
+        # repoint the calc pointer AR to the current month for every row
+        _set(ws, r, PPH_AR, f"=${cur_L}{r}")
+
+    # 3. append brand-new mitras (in the just-written Data Sources master, absent from PPh)
+    appended = _append_new_pph_mitras(wb, ws, row_by_dp, last_row, cur, cur_L,
+                                      active_dpids, byowner_dpids, verbose)
+
+    if verbose:
+        print(f"[writer] PPh: current month {par.pph_bruto_label(month)} -> col {cur_L}; "
+              f"bruto formula on {installed} active rows; AR repointed; {appended} new mitra(s) appended")
+    return installed, appended
+
+
+def _append_new_pph_mitras(wb, ws, row_by_dp, last_row, cur, cur_L, active_dpids, byowner_dpids, verbose):
+    if DATA_SOURCES_SHEET not in wb.sheetnames:
+        return 0
+    ds, ds_headers, _ = _read_sheet_table(wb[DATA_SOURCES_SHEET],
+                                          DATA_SOURCES_HEADER_ROW, DATA_SOURCES_DATA_START)
+    # Only append mitras that are ACTIVE this month and NOT "By Owner" (by-owner mitras are
+    # invoiced at owner level and deliberately absent from PPh) — matches golden. By-owner is
+    # taken from the commission frame (the DS Region column may be a formula in formula-view).
+    missing = []
+    for _, row in ds.iterrows():
+        dp = par._norm_one(row.get("DPID"))
+        if dp and dp not in row_by_dp and dp in active_dpids and dp not in byowner_dpids:
+            missing.append(row)
+    if not missing:
+        return 0
+
+    # fill-down reference = a fully-formula'd existing row (col F VLOOKUP present); fall back to last row
+    ref = next((r for r in range(PPH_DATA_START, last_row + 1)
+                if _is_formula(ws.cell(row=r, column=ci("F")).value)), last_row)
+    formula_cols = [c for c in range(1, ws.max_column + 1)
+                    if _is_formula(ws.cell(row=ref, column=c).value)]
+    bruto_cols = range(PPH_BRUTO_FIRST, PPH_BRUTO_LAST + 1)
+    pph_cols = range(PPH_PPH_FIRST, PPH_PPH_LAST + 1)
+
+    r = last_row
+    for row in missing:
+        r += 1
+        _filldown_formulas(ws, ref, r, formula_cols)          # F/G/AD/AR..AZ/VAT etc.
+        for c, ds_col in PPH_NEW_ROW_MAP.items():              # seed master cols from Data Sources
+            _set(ws, r, c, _cell_val(row.get(ds_col)))
+        _set(ws, r, ci("J"), "Tidak Ada")                     # SKB defaults to none (tax team fills)
+        for c in bruto_cols:                                  # no history for a new mitra
+            _set(ws, r, c, 0)
+        for c in pph_cols:
+            _set(ws, r, c, 0)
+        dp = par._norm_one(row.get("DPID"))
+        if dp in active_dpids:                                # active new mitra -> live bruto formula
+            _set(ws, r, cur, PPH_BRUTO_FORMULA.format(r=r))
+        _set(ws, r, PPH_AR, f"=${cur_L}{r}")                  # calc pointer
+    if verbose:
+        print(f"[writer] PPh: appended {len(missing)} new mitra row(s) at rows {last_row+1}..{r}")
+    return len(missing)
 
 
 # --------------------------------------------------------------------------
