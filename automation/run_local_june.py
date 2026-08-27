@@ -175,6 +175,15 @@ def main():
     commission = par.assemble_commission(data, kpi_fn)
     print(f"\nBuilt Commission rows: {len(commission)} (expected ~169)")
 
+    # ---- Phase 2b: Commission sort + Rekap / By-Owner key lists ----
+    byo = par._is_by_owner(commission["D"])
+    print(f"Commission last 8 DPIDs: {commission['A'].tail(8).tolist()}")
+    print(f"'By Owner' rows (should be at the bottom): {commission.loc[byo, 'A'].tolist()}")
+    rekap_keys = par.build_rekap_keys(commission)
+    byowner_keys = par.build_byowner_keys(commission)
+    print(f"Rekap keys: {len(rekap_keys)} (last 6: {rekap_keys[-6:]})")
+    print(f"By Owner keys: {byowner_keys}")
+
     src_keys = {
         "acq": set(par._norm_id(df_acq["DP ID"])) if df_acq is not None else None,
         "allo": set(par._norm_id(df_allo["DP ID"])) if df_allo is not None else None,
@@ -184,8 +193,10 @@ def main():
     diff_kpi(commission, load_golden_commission_by_dpid(), src_keys)
 
     if do_write:
-        print("\n===== Writing workbook (template round-trip; ~3 min) =====")
-        par_writer.write_pivot_all_region(GOLDEN, OUT_FILE, data, commission)
+        print("\n===== Writing workbook (LIVE template round-trip; ~3 min) =====")
+        par_writer.write_pivot_all_region(GOLDEN, OUT_FILE, data, commission,
+                                          rekap_keys=rekap_keys, byowner_keys=byowner_keys,
+                                          month="2026-06")
         print(f"[done] wrote {OUT_FILE}")
     else:
         print("\n(skipped workbook write: --no-write)")

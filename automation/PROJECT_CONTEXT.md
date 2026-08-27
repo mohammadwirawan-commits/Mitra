@@ -348,13 +348,33 @@ Replaced the arbitrary raw-file drops with a standardized intake, per user decis
   per-DP H/I **0 mismatch** vs golden (H=−13,942,793.5, I=−17,450,412, 53 rows, outstanding matches).
   Raw-file path still 0-mismatch after the refactor.
 
+### Phase 2b — ✅ DONE (2026-08-21, branch `phase2b-live-pivots`)
+**Writer re-architected to a LIVE round-trip** (`par_writer.py`): stop flattening — preserve all
+pivots (`Pivot Data`, `Commission!CX`, 3 Adjustment pivots), set every cache `refreshOnLoad=True` +
+rewrite its source ref, `fullCalcOnLoad=True`; stamp Commission value-cols only (keep GETPIVOTDATA/
+computed formulas, fill-down/clear to match rows). Commission sort = ascending DPID + "By Owner" rows
+(Region=="By Owner") at the bottom. `Rekap Commission` / `By Owner per Mitra` = stamp col-A key list
+only (formulas live): `build_rekap_keys` (unique DPMS + owner codes) / `build_byowner_keys`. Data
+Sources = expanded `Data Mitra Changes` intake (28 cols, 26 match DS headers) upserted by DP ID
+(`upsert_data_sources`). Notebook cell `2cebdce7` wired. **Manual step:** open in Excel to refresh.
+
+### Phase 3a — PPh Mitra Ninja 2026 (income-tax sheet) — in progress (2026-08-21)
+`par_writer._write_pph(wb, month, active_dpids, byowner_dpids)` — verified vs golden:
+- 12-month rolling ledger, keyed by DP ID (col B). **Bruto** (current month, June=col X) = live VLOOKUP
+  `Rekap` col 48 (Total Commission) + col 49 (KPI Pickup) − `GETPIVOTDATA` Adjustment Bruto; installed
+  only for `active_dpids` (Commission DP set), inactive → 0. Prior month **frozen to values** (read the
+  template's cached column, `read_only,data_only`). Calc pointer `AR = $X` repointed.
+- **PPh calc `AZ` is live** (`IF(SKB="Ada",0.5%,IF(PT/CV,2%,progressive PPh-21 TER on 50%×gross))`) —
+  rates verified. Month PPh cols (`AE:AP`) are the tax team's lagging ledger — **left untouched**.
+- New mitras: append only **active, non-by-owner, missing** DP IDs (from written `Data Sources`),
+  seeding master A:Q + filling down formulas. By-owner taken from the commission frame (`byowner_dpid_set`)
+  since the DS Region col is a formula in formula-view. Month→col via `par.pph_bruto_label`.
+- Verified: June-from-golden = 165 active X-formulas, 0 appended (5 active-missing are by-owner);
+  May→June (`M05` template) freezes W's 182 formulas to values, installs X. **Excel open-check pending.**
+
 ### Next
-2. **Phase 2b** — Data Sources (mitra master from `Data Mitra Changes` + carry-forward + Region
-   VLOOKUP), Rekap Commission (DPMS rollup of Commission joined to Data Sources + release/due dates),
-   By Owner per Mitra.
-3. **Phase 3** — PPh (entity types: Pribadi / Pribadi-no-NPWP / PT / CV 2% / UMKM 0.5%, SKB,
-   carry columns), Generate + Generate By Owner (transpose selected DPIDs into the per-column PDF
-   layout the existing Generate-PDF Python consumes).
+- **Phase 3b** — Generate + Generate By Owner (transpose selected DPIDs into the per-column PDF layout
+  the existing Generate-PDF Python consumes).
 
 **Verification approach for every phase:** diff generated sheet vs `M06Y2026 Pivot All Region.xlsx`
 using the engine-isolation method (feed golden inputs, compare computed outputs), with float tolerance.
