@@ -28,6 +28,9 @@
 /_generated/
 /_archive/
 
+# --- Generated copy-paste snapshot (regenerate with automation/make_deploy.py) ---
+/deploy/
+
 # --- Python ---
 __pycache__/
 *.py[cod]
