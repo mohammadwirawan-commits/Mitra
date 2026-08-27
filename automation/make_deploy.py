@@ -28,6 +28,7 @@ RUNTIME_MODULES = ["par_pipeline.py", "par_writer.py", "par_adjustment.py", "par
 TEMPLATES = [
     os.path.join(BASE, "TEMPLATES", "Mitra Commission Intake - MASTER TEMPLATE.xlsx"),
     os.path.join(BASE, "TEMPLATES", "Penalty Intake TEMPLATE.xlsx"),
+    os.path.join(AUTO, "intake_cleanup.gs"),   # Apps Script: monthly "clear last month" button
 ]
 
 README = """# Deploy — what to copy for a monthly run
@@ -52,6 +53,13 @@ and share one link; the team fills their tabs and exports it as
 `Mitra Commission Intake {{Mon-YYYY}}.xlsx` into the month's `Intake/` folder.
 `Penalty Intake TEMPLATE.xlsx` is the separate penalty intake.
 
+### Monthly reset button (one-time install)
+`intake-templates/intake_cleanup.gs` is a Google Apps Script for the shared intake
+Sheet. In the Sheet: Extensions ▸ Apps Script ▸ paste the file ▸ Save ▸ reload.
+It adds "Intake Tools ▸ Clear last month's entries" — clears the pasted data in the
+owner tabs (keeps headers, formatting, the reference tabs, and README). Run it each
+month after that month's workbook has been generated.
+
 ## 4. After the run — REQUIRED
 **Open the downloaded `M##Y#### Pivot All Region.xlsx` in Excel once and Save it.**
 That refreshes the pivots (set to refresh-on-open), recalculates every formula
@@ -64,23 +72,31 @@ Prior-month `Pivot All Region.xlsx` (opened+saved in Excel), the month's `Intake
 """
 
 
+def _copy(src, dst):
+    """Overwrite-in-place copy that tolerates a locked destination (e.g. the file is
+    open in Excel) — warns and skips instead of aborting the whole snapshot."""
+    try:
+        shutil.copy2(src, dst)
+    except PermissionError:
+        print(f"  [skip] in use, left as-is: deploy/{os.path.relpath(dst, DEPLOY)}")
+
+
 def main():
-    if os.path.isdir(DEPLOY):
-        shutil.rmtree(DEPLOY)
-    os.makedirs(os.path.join(DEPLOY, "automation"))
-    os.makedirs(os.path.join(DEPLOY, "intake-templates"))
+    # Don't rmtree (a file open in Excel would lock the whole tree) — overwrite in place.
+    os.makedirs(os.path.join(DEPLOY, "automation"), exist_ok=True)
+    os.makedirs(os.path.join(DEPLOY, "intake-templates"), exist_ok=True)
 
     for m in RUNTIME_MODULES:
-        shutil.copy2(os.path.join(AUTO, m), os.path.join(DEPLOY, "automation", m))
+        _copy(os.path.join(AUTO, m), os.path.join(DEPLOY, "automation", m))
 
     nb = glob.glob(os.path.join(BASE, "Mitra Commission Intake*.ipynb"))
     nb_name = os.path.basename(nb[0]) if nb else "Mitra Commission Intake.ipynb"
     if nb:
-        shutil.copy2(nb[0], os.path.join(DEPLOY, nb_name))
+        _copy(nb[0], os.path.join(DEPLOY, nb_name))
 
     for t in TEMPLATES:
         if os.path.exists(t):
-            shutil.copy2(t, os.path.join(DEPLOY, "intake-templates", os.path.basename(t)))
+            _copy(t, os.path.join(DEPLOY, "intake-templates", os.path.basename(t)))
 
     with open(os.path.join(DEPLOY, "README.md"), "w", encoding="utf8") as f:
         f.write(README.replace("{notebook}", nb_name))
